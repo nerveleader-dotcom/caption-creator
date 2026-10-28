@@ -1,0 +1,82 @@
+name: Build Caption Creator Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'caption_creator_native_payload.zip'
+      - 'native/**'
+      - '.github/workflows/build-android-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - name: Check out Caption Creator files
+        uses: actions/checkout@v4
+
+      - name: Extract Caption Creator native files
+        run: |
+          unzip -o caption_creator_native_payload.zip
+          test -f native/MainActivity.kt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and CMake
+        run: |
+          sdkmanager --install 'platforms;android-36' 'ndk;29.0.13113456' 'cmake;3.31.6'
+
+      - name: Get official llama.cpp Android inference engine
+        run: |
+          git clone --depth 1 --filter=blob:none https://github.com/ggml-org/llama.cpp.git llama-source
+          test -f llama-source/examples/llama.android/lib/build.gradle.kts
+
+      - name: Assemble independent Caption Creator app
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          base = Path('llama-source/examples/llama.android')
+          main = base/'app/src/main'
+          (main/'java/com/example/llama').mkdir(parents=True, exist_ok=True)
+          (main/'assets').mkdir(parents=True, exist_ok=True)
+          (main/'res/drawable').mkdir(parents=True, exist_ok=True)
+          shutil.copy2('native/MainActivity.kt', main/'java/com/example/llama/MainActivity.kt')
+          shutil.copy2('native/AndroidManifest.xml', main/'AndroidManifest.xml')
+          shutil.copy2('native/assets/index.html', main/'assets/index.html')
+          shutil.copy2('native/assets/app.js', main/'assets/app.js')
+          shutil.copy2('native/caption_icon.png', main/'res/drawable/caption_icon.png')
+          app = base/'app/build.gradle.kts'
+          contents = app.read_text()
+          assert 'applicationId = "com.example.llama.aichat"' in contents, 'Upstream app ID changed: update workflow'
+          contents = contents.replace('applicationId = "com.example.llama.aichat"', 'applicationId = "com.twisted.captioncreator"')
+          app.write_text(contents)
+          lib = base/'lib/build.gradle.kts'
+          content = lib.read_text().replace('listOf("arm64-v8a", "x86_64")', 'listOf("arm64-v8a")')
+          lib.write_text(content)
+          PY
+
+      - name: Build Android APK
+        working-directory: llama-source/examples/llama.android
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CaptionCreator-Android-APK
+          path: llama-source/examples/llama.android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
