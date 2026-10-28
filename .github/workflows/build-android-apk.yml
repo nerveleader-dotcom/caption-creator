@@ -23,6 +23,7 @@ jobs:
         run: |
           unzip -o caption_creator_native_payload.zip
           test -f native/MainActivity.kt
+          sed -i "s/,'endpoint','model'//" native/assets/app.js
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
